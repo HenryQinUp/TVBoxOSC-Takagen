@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="color_FFB800">#FF6600</color>
-    <color name="color_FF0057">#FF0057</color>
-    <color name="color_FF0057_80">#CCFF0057</color>
-    <color name="color_FF0057_70">#B3FF0057</color>
-    <color name="color_FF0057_40">#66FF0057</color>
+    <color name="color_FF0057">#C1F5BC</color>
+    <color name="color_FF0057_80">#CCC1F5BC</color>
+    <color name="color_FF0057_70">#B3C1F5BC</color>
+    <color name="color_FF0057_40">#66C1F5BC</color>
 
     <!-- Main Dialog Button BG -->
-    <color name="color_6C0025_70">#B3D0E3CE</color>
+    <color name="color_6C0025_70">#B3C1F5BC</color>
 
     <!-- EPG Colors -->
     <color name="color_32364E">#32364E</color>
@@ -39,6 +39,6 @@
     <color name="color_000000_15">#26000000</color>
 
     <!-- Unused Subtitle Text -->
-    <color name="color_FFB6C1">#FFB6C1</color>
+    <color name="color_FFB6C1">#C1F5BC</color>
     <color name="color_6CFFFFFF">#6CFFFFFF</color>
 </resources>
