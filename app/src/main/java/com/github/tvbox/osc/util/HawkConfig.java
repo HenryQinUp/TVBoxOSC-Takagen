@@ -8,7 +8,7 @@ import com.orhanobut.hawk.Hawk;
  * @description:
  */
 public class HawkConfig {
-    public static final String API_URL = "https://henryqinup.github.io/JK/Q2WForever.json";
+    public static final String API_URL = "api_url";
     public static final String SHOW_PREVIEW = "show_preview";
     public static final String API_HISTORY = "api_history";
     public static final String HOME_API = "home_api";
