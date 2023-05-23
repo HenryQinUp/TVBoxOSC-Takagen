@@ -42,7 +42,6 @@
 -keep public class * extends android.app.backup.BackupAgentHelper
 -keep public class * extends android.preference.Preference
 -keep public class * extends android.view.View
--keep public class com.android.vending.licensing.ILicensingService
 
 # 保留support下的所有类及其内部类
 -keep class android.support.** {*;}
@@ -216,12 +215,6 @@
 # magnet：解决模拟器推送 磁力链接 闪退
 -keep class com.xunlei.downloadlib.** {*;}
 
-# support python
--keep public class com.undcover.freedom.pyramid.** { *; }
--dontwarn com.undcover.freedom.pyramid.**
--keep public class com.chaquo.python.** { *; }
-# python引擎
--dontwarn com.chaquo.python.**
 # quickjs引擎
 -keep class com.github.tvbox.quickjs.** {*;}
 # 支持影视的ali相关的jar

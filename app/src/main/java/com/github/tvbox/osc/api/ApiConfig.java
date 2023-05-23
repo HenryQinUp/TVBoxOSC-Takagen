@@ -8,7 +8,6 @@ import android.util.Base64;
 import com.github.catvod.crawler.JarLoader;
 import com.github.catvod.crawler.JsLoader;
 import com.github.catvod.crawler.Spider;
-import com.github.catvod.crawler.SpiderNull;
 import com.github.tvbox.osc.R;
 import com.github.tvbox.osc.base.App;
 import com.github.tvbox.osc.bean.IJKCode;
@@ -32,8 +31,8 @@ import com.lzy.okgo.OkGo;
 import com.lzy.okgo.callback.AbsCallback;
 import com.lzy.okgo.model.Response;
 import com.orhanobut.hawk.Hawk;
-import com.undcover.freedom.pyramid.PythonLoader;
 
+import org.apache.commons.lang3.StringUtils;
 import org.json.JSONObject;
 
 import java.io.BufferedReader;
@@ -164,6 +163,7 @@ public class ApiConfig {
         } else {
             configUrl = apiUrl;
         }
+        System.out.println("API URL :" + configUrl);
         String configKey = TempKey;
         OkGo.<String>get(configUrl)
                 .headers("User-Agent", userAgent)
@@ -173,7 +173,6 @@ public class ApiConfig {
                     public void onSuccess(Response<String> response) {
                         try {
                             String json = response.body();
-                            json = FindResult(json, configKey);
                             parseJson(apiUrl, json);
                             try {
                                 File cacheDir = cache.getParentFile();
@@ -215,7 +214,7 @@ public class ApiConfig {
                         if (response.body() == null) {
                             result = "";
                         } else {
-                            result = response.body().string();
+                            result = FindResult(response.body().string(), configKey);
                         }
                         if (apiUrl.startsWith("clan")) {
                             result = clanContentFix(clanToAddress(apiUrl), result);
@@ -225,7 +224,6 @@ public class ApiConfig {
                     }
                 });
     }
-
 
     public void loadJar(boolean useCache, String spider, LoadConfigCallback callback) {
         String[] urls = spider.split(";md5;");
@@ -305,8 +303,6 @@ public class ApiConfig {
     }
 
     private void parseJson(String apiUrl, String jsonStr) {
-        // pyramid
-        PythonLoader.getInstance().setConfig(jsonStr);
 
         JsonObject infoJson = new Gson().fromJson(jsonStr, JsonObject.class);
         // spider
@@ -326,6 +322,7 @@ public class ApiConfig {
             sb.setSearchable(DefaultConfig.safeJsonInt(obj, "searchable", 1));
             sb.setQuickSearch(DefaultConfig.safeJsonInt(obj, "quickSearch", 1));
             sb.setFilterable(DefaultConfig.safeJsonInt(obj, "filterable", 1));
+            sb.setHide(DefaultConfig.safeJsonInt(obj, "hide", 0));
             sb.setPlayerUrl(DefaultConfig.safeJsonString(obj, "playUrl", ""));
             if (obj.has("ext") && (obj.get("ext").isJsonObject() || obj.get("ext").isJsonArray())) {
                 sb.setExt(obj.get("ext").toString());
@@ -376,10 +373,16 @@ public class ApiConfig {
             if (mDefaultParse == null)
                 setDefaultParse(parseBeanList.get(0));
         }
-        // 直播源
+
+        // takagen99: Check if Live URL is setup in Settings, if no, get from File Config
         liveChannelGroupList.clear();           //修复从后台切换重复加载频道列表
+        String liveURL = Hawk.get(HawkConfig.LIVE_URL, "");
+        String epgURL  = Hawk.get(HawkConfig.EPG_URL, "");
+
+        String liveURL_final = null;
         try {
-            String lives = infoJson.get("lives").getAsJsonArray().toString();
+            JsonObject livesOBJ = infoJson.get("lives").getAsJsonArray().get(0).getAsJsonObject();
+            String lives = livesOBJ.toString();
             int index = lives.indexOf("proxy://");
             if (index != -1) {
                 int endIndex = lives.lastIndexOf("\"");
@@ -395,24 +398,105 @@ public class ApiConfig {
                     } else {
                         extUrlFix = new String(Base64.decode(extUrl, Base64.DEFAULT | Base64.URL_SAFE | Base64.NO_WRAP), "UTF-8");
                     }
-//                    System.out.println("extUrlFix :"+extUrlFix);
                     if (extUrlFix.startsWith("clan://")) {
                         extUrlFix = clanContentFix(clanToAddress(apiUrl), extUrlFix);
                     }
-                    extUrlFix = Base64.encodeToString(extUrlFix.getBytes("UTF-8"), Base64.DEFAULT | Base64.URL_SAFE | Base64.NO_WRAP);
-                    url = url.replace(extUrl, extUrlFix);
+
+                    // takagen99: Capture Live URL into Config
+                    System.out.println("Live URL :" + extUrlFix);
+                    putLiveHistory(extUrlFix);
+                    // Overwrite with Live URL from Settings
+                    if (StringUtils.isBlank(liveURL)) {
+                        Hawk.put(HawkConfig.LIVE_URL, extUrlFix);
+                    } else {
+                        extUrlFix = liveURL;
+                    }
+
+                    // Final Live URL
+                    liveURL_final = extUrlFix;
+
+//                    // Encoding the Live URL
+//                    extUrlFix = Base64.encodeToString(extUrlFix.getBytes("UTF-8"), Base64.DEFAULT | Base64.URL_SAFE | Base64.NO_WRAP);
+//                    url = url.replace(extUrl, extUrlFix);
                 }
-//                System.out.println("urlLive :"+url);
-                LiveChannelGroup liveChannelGroup = new LiveChannelGroup();
-                liveChannelGroup.setGroupName(url);
-                liveChannelGroupList.add(liveChannelGroup);
+
+                // takagen99 : Getting EPG URL from File Config & put into Settings
+                if (livesOBJ.has("epg")) {
+                    String epg = livesOBJ.get("epg").getAsString();
+                    System.out.println("EPG URL :" + epg);
+                    putEPGHistory(epg);
+                    // Overwrite with EPG URL from Settings
+                    if (StringUtils.isBlank(epgURL)) {
+                        Hawk.put(HawkConfig.EPG_URL, epg);
+                    } else {
+                        Hawk.put(HawkConfig.EPG_URL, epgURL);
+                    }
+                }
+
+//                // Populate Live Channel Listing
+//                LiveChannelGroup liveChannelGroup = new LiveChannelGroup();
+//                liveChannelGroup.setGroupName(url);
+//                liveChannelGroupList.add(liveChannelGroup);
+
             } else {
-                if (lives.contains("group")) loadLives(infoJson.get("lives").getAsJsonArray());
+
+                // if FongMi Live URL Formatting exists
+                if (!lives.contains("type")) {
+                    loadLives(infoJson.get("lives").getAsJsonArray());
+                } else {
+                    JsonObject fengMiLives = infoJson.get("lives").getAsJsonArray().get(0).getAsJsonObject();
+                    String type = fengMiLives.get("type").getAsString();
+                    if (type.equals("0")) {
+                        String url = fengMiLives.get("url").getAsString();
+
+                        // takagen99 : Getting EPG URL from File Config & put into Settings
+                        if (fengMiLives.has("epg")) {
+                            String epg = fengMiLives.get("epg").getAsString();
+                            System.out.println("EPG URL :" + epg);
+                            putEPGHistory(epg);
+                            // Overwrite with EPG URL from Settings
+                            if (StringUtils.isBlank(epgURL)) {
+                                Hawk.put(HawkConfig.EPG_URL, epg);
+                            } else {
+                                Hawk.put(HawkConfig.EPG_URL, epgURL);
+                            }
+                        }
+
+                        if (url.startsWith("http")) {
+                            // takagen99: Capture Live URL into Settings
+                            System.out.println("Live URL :" + url);
+                            putLiveHistory(url);
+                            // Overwrite with Live URL from Settings
+                            if (StringUtils.isBlank(liveURL)) {
+                                Hawk.put(HawkConfig.LIVE_URL, url);
+                            } else {
+                                url = liveURL;
+                            }
+
+                            // Final Live URL
+                            liveURL_final = url;
+
+//                            url = Base64.encodeToString(url.getBytes("UTF-8"), Base64.DEFAULT | Base64.URL_SAFE | Base64.NO_WRAP);
+                        }
+                    }
+                }
             }
+
+            // takagen99: Load Live Channel from settings URL (WIP)
+            if (StringUtils.isBlank(liveURL_final)) {
+                liveURL_final = liveURL;
+            }
+            liveURL_final = Base64.encodeToString(liveURL_final.getBytes("UTF-8"), Base64.DEFAULT | Base64.URL_SAFE | Base64.NO_WRAP);
+            liveURL_final = "http://127.0.0.1:9978/proxy?do=live&type=txt&ext=" + liveURL_final;
+            LiveChannelGroup liveChannelGroup = new LiveChannelGroup();
+            liveChannelGroup.setGroupName(liveURL_final);
+            liveChannelGroupList.add(liveChannelGroup);
+
         } catch (Throwable th) {
             th.printStackTrace();
         }
-        //video parse rule for host
+
+        // Video parse rule for host
         if (infoJson.has("rules")) {
             VideoParseRuler.clearRule();
             for (JsonElement oneHostRule : infoJson.getAsJsonArray("rules")) {
@@ -443,7 +527,7 @@ public class ApiConfig {
             }
         }
 
-        String defaultIJKADS = "{\"ijk\":[{\"options\":[{\"name\":\"opensles\",\"category\":4,\"value\":\"0\"},{\"name\":\"overlay-format\",\"category\":4,\"value\":\"842225234\"},{\"name\":\"framedrop\",\"category\":4,\"value\":\"1\"},{\"name\":\"soundtouch\",\"category\":4,\"value\":\"1\"},{\"name\":\"start-on-prepared\",\"category\":4,\"value\":\"1\"},{\"name\":\"http-detect-rangeupport\",\"category\":1,\"value\":\"0\"},{\"name\":\"fflags\",\"category\":1,\"value\":\"fastseek\"},{\"name\":\"skip_loop_filter\",\"category\":2,\"value\":\"48\"},{\"name\":\"reconnect\",\"category\":4,\"value\":\"1\"},{\"name\":\"enable-accurateeek\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec-auto-rotate\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec-handle-resolution-change\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec-hevc\",\"category\":4,\"value\":\"0\"},{\"name\":\"dns_cache_timeout\",\"category\":1,\"value\":\"600000000\"}],\"group\":\"软解码\"},{\"options\":[{\"name\":\"opensles\",\"category\":4,\"value\":\"0\"},{\"name\":\"overlay-format\",\"category\":4,\"value\":\"842225234\"},{\"name\":\"framedrop\",\"category\":4,\"value\":\"1\"},{\"name\":\"soundtouch\",\"category\":4,\"value\":\"1\"},{\"name\":\"start-on-prepared\",\"category\":4,\"value\":\"1\"},{\"name\":\"http-detect-rangeupport\",\"category\":1,\"value\":\"0\"},{\"name\":\"fflags\",\"category\":1,\"value\":\"fastseek\"},{\"name\":\"skip_loop_filter\",\"category\":2,\"value\":\"48\"},{\"name\":\"reconnect\",\"category\":4,\"value\":\"1\"},{\"name\":\"enable-accurateeek\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec\",\"category\":4,\"value\":\"1\"},{\"name\":\"mediacodec-auto-rotate\",\"category\":4,\"value\":\"1\"},{\"name\":\"mediacodec-handle-resolution-change\",\"category\":4,\"value\":\"1\"},{\"name\":\"mediacodec-hevc\",\"category\":4,\"value\":\"1\"},{\"name\":\"dns_cache_timeout\",\"category\":1,\"value\":\"600000000\"}],\"group\":\"硬解码\"}],\"ads\":[\"mimg.0c1q0l.cn\",\"www.googletagmanager.com\",\"www.google-analytics.com\",\"mc.usihnbcq.cn\",\"mg.g1mm3d.cn\",\"mscs.svaeuzh.cn\",\"cnzz.hhttm.top\",\"tp.vinuxhome.com\",\"cnzz.mmstat.com\",\"www.baihuillq.com\",\"s23.cnzz.com\",\"z3.cnzz.com\",\"c.cnzz.com\",\"stj.v1vo.top\",\"z12.cnzz.com\",\"img.mosflower.cn\",\"tips.gamevvip.com\",\"ehwe.yhdtns.com\",\"xdn.cqqc3.com\",\"www.jixunkyy.cn\",\"sp.chemacid.cn\",\"hm.baidu.com\",\"s9.cnzz.com\",\"z6.cnzz.com\",\"um.cavuc.com\",\"mav.mavuz.com\",\"wofwk.aoidf3.com\",\"z5.cnzz.com\",\"xc.hubeijieshikj.cn\",\"tj.tianwenhu.com\",\"xg.gars57.cn\",\"k.jinxiuzhilv.com\",\"cdn.bootcss.com\",\"ppl.xunzhuo123.com\",\"xomk.jiangjunmh.top\",\"img.xunzhuo123.com\",\"z1.cnzz.com\",\"s13.cnzz.com\",\"xg.huataisangao.cn\",\"z7.cnzz.com\",\"xg.huataisangao.cn\",\"z2.cnzz.com\",\"s96.cnzz.com\",\"q11.cnzz.com\",\"thy.dacedsfa.cn\",\"xg.whsbpw.cn\",\"s19.cnzz.com\",\"z8.cnzz.com\",\"s4.cnzz.com\",\"f5w.as12df.top\",\"ae01.alicdn.com\",\"www.92424.cn\",\"k.wudejia.com\",\"vivovip.mmszxc.top\",\"qiu.xixiqiu.com\",\"cdnjs.hnfenxun.com\",\"cms.qdwght.com\"]}";
+        String defaultIJKADS = "{\"ijk\":[{\"options\":[{\"name\":\"opensles\",\"category\":4,\"value\":\"0\"},{\"name\":\"overlay-format\",\"category\":4,\"value\":\"842225234\"},{\"name\":\"framedrop\",\"category\":4,\"value\":\"0\"},{\"name\":\"soundtouch\",\"category\":4,\"value\":\"1\"},{\"name\":\"start-on-prepared\",\"category\":4,\"value\":\"1\"},{\"name\":\"http-detect-rangeupport\",\"category\":1,\"value\":\"0\"},{\"name\":\"fflags\",\"category\":1,\"value\":\"fastseek\"},{\"name\":\"skip_loop_filter\",\"category\":2,\"value\":\"48\"},{\"name\":\"reconnect\",\"category\":4,\"value\":\"1\"},{\"name\":\"enable-accurate-seek\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec-auto-rotate\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec-handle-resolution-change\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec-hevc\",\"category\":4,\"value\":\"0\"},{\"name\":\"dns_cache_timeout\",\"category\":1,\"value\":\"600000000\"}],\"group\":\"软解码\"},{\"options\":[{\"name\":\"opensles\",\"category\":4,\"value\":\"0\"},{\"name\":\"overlay-format\",\"category\":4,\"value\":\"842225234\"},{\"name\":\"framedrop\",\"category\":4,\"value\":\"0\"},{\"name\":\"soundtouch\",\"category\":4,\"value\":\"1\"},{\"name\":\"start-on-prepared\",\"category\":4,\"value\":\"1\"},{\"name\":\"http-detect-rangeupport\",\"category\":1,\"value\":\"0\"},{\"name\":\"fflags\",\"category\":1,\"value\":\"fastseek\"},{\"name\":\"skip_loop_filter\",\"category\":2,\"value\":\"48\"},{\"name\":\"reconnect\",\"category\":4,\"value\":\"1\"},{\"name\":\"enable-accurate-seek\",\"category\":4,\"value\":\"0\"},{\"name\":\"mediacodec\",\"category\":4,\"value\":\"1\"},{\"name\":\"mediacodec-auto-rotate\",\"category\":4,\"value\":\"1\"},{\"name\":\"mediacodec-handle-resolution-change\",\"category\":4,\"value\":\"1\"},{\"name\":\"mediacodec-hevc\",\"category\":4,\"value\":\"1\"},{\"name\":\"dns_cache_timeout\",\"category\":1,\"value\":\"600000000\"}],\"group\":\"硬解码\"}],\"ads\":[\"mimg.0c1q0l.cn\",\"www.googletagmanager.com\",\"www.google-analytics.com\",\"mc.usihnbcq.cn\",\"mg.g1mm3d.cn\",\"mscs.svaeuzh.cn\",\"cnzz.hhttm.top\",\"tp.vinuxhome.com\",\"cnzz.mmstat.com\",\"www.baihuillq.com\",\"s23.cnzz.com\",\"z3.cnzz.com\",\"c.cnzz.com\",\"stj.v1vo.top\",\"z12.cnzz.com\",\"img.mosflower.cn\",\"tips.gamevvip.com\",\"ehwe.yhdtns.com\",\"xdn.cqqc3.com\",\"www.jixunkyy.cn\",\"sp.chemacid.cn\",\"hm.baidu.com\",\"s9.cnzz.com\",\"z6.cnzz.com\",\"um.cavuc.com\",\"mav.mavuz.com\",\"wofwk.aoidf3.com\",\"z5.cnzz.com\",\"xc.hubeijieshikj.cn\",\"tj.tianwenhu.com\",\"xg.gars57.cn\",\"k.jinxiuzhilv.com\",\"cdn.bootcss.com\",\"ppl.xunzhuo123.com\",\"xomk.jiangjunmh.top\",\"img.xunzhuo123.com\",\"z1.cnzz.com\",\"s13.cnzz.com\",\"xg.huataisangao.cn\",\"z7.cnzz.com\",\"xg.huataisangao.cn\",\"z2.cnzz.com\",\"s96.cnzz.com\",\"q11.cnzz.com\",\"thy.dacedsfa.cn\",\"xg.whsbpw.cn\",\"s19.cnzz.com\",\"z8.cnzz.com\",\"s4.cnzz.com\",\"f5w.as12df.top\",\"ae01.alicdn.com\",\"www.92424.cn\",\"k.wudejia.com\",\"vivovip.mmszxc.top\",\"qiu.xixiqiu.com\",\"cdnjs.hnfenxun.com\",\"cms.qdwght.com\"]}";
         JsonObject defaultJson = new Gson().fromJson(defaultIJKADS, JsonObject.class);
         // 广告地址
         if (AdBlocker.isEmpty()) {
@@ -465,7 +549,8 @@ public class ApiConfig {
             ijkCodes = new ArrayList<>();
             boolean foundOldSelect = false;
             String ijkCodec = Hawk.get(HawkConfig.IJK_CODEC, "");
-            for (JsonElement opt : defaultJson.get("ijk").getAsJsonArray()) {
+            JsonArray ijkJsonArray = infoJson.has("ijk") ? infoJson.get("ijk").getAsJsonArray() : defaultJson.get("ijk").getAsJsonArray();
+            for (JsonElement opt : ijkJsonArray) {
                 JsonObject obj = (JsonObject) opt;
                 String name = obj.get("group").getAsString();
                 LinkedHashMap<String, String> baseOpt = new LinkedHashMap<>();
@@ -490,6 +575,28 @@ public class ApiConfig {
             if (!foundOldSelect && ijkCodes.size() > 0) {
                 ijkCodes.get(0).selected(true);
             }
+        }
+    }
+
+    private void putLiveHistory(String url) {
+        if (!url.isEmpty()) {
+            ArrayList<String> liveHistory = Hawk.get(HawkConfig.LIVE_HISTORY, new ArrayList<String>());
+            if (!liveHistory.contains(url))
+                liveHistory.add(0, url);
+            if (liveHistory.size() > 20)
+                liveHistory.remove(20);
+            Hawk.put(HawkConfig.LIVE_HISTORY, liveHistory);
+        }
+    }
+
+    public static void putEPGHistory(String url) {
+        if (!url.isEmpty()) {
+            ArrayList<String> epgHistory = Hawk.get(HawkConfig.EPG_HISTORY, new ArrayList<String>());
+            if (!epgHistory.contains(url))
+                epgHistory.add(0, url);
+            if (epgHistory.size() > 20)
+                epgHistory.remove(20);
+            Hawk.put(HawkConfig.EPG_HISTORY, epgHistory);
         }
     }
 
@@ -548,37 +655,10 @@ public class ApiConfig {
             return jsLoader.getSpider(sourceBean.getKey(), sourceBean.getApi(), sourceBean.getExt(), sourceBean.getJar());
         }
 
-        // Getting Pyramid api
-        if (sourceBean.getApi().startsWith("py_")) {
-            try {
-                return PythonLoader.getInstance().getSpider(sourceBean.getKey(), sourceBean.getExt());
-            } catch (Exception e) {
-                e.printStackTrace();
-                return new SpiderNull();
-            }
-        }
-
         return jarLoader.getSpider(sourceBean.getKey(), sourceBean.getApi(), sourceBean.getExt(), sourceBean.getJar());
     }
 
     public Object[] proxyLocal(Map param) {
-
-        // Getting pyramid api
-        try {
-            if (param.containsKey("api")) {
-                String doStr = param.get("do").toString();
-                if (doStr.equals("ck"))
-                    return PythonLoader.getInstance().proxyLocal("", "", param);
-                SourceBean sourceBean = ApiConfig.get().getSource(doStr);
-                return PythonLoader.getInstance().proxyLocal(sourceBean.getKey(), sourceBean.getExt(), param);
-            } else {
-                String doStr = param.get("do").toString();
-                if (doStr.equals("live"))
-                    return PythonLoader.getInstance().proxyLocal("", "", param);
-            }
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
 
         return jarLoader.proxyInvoke(param);
     }
@@ -690,4 +770,12 @@ public class ApiConfig {
         }
         return content;
     }
+
+    String miTV(String url) {
+        if (url.startsWith("p") || url.startsWith("mitv")) {
+
+        }
+        return url;
+    }
+
 }
